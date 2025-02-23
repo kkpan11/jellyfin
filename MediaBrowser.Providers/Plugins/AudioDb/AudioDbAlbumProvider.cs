@@ -148,21 +148,19 @@ namespace MediaBrowser.Providers.Plugins.AudioDb
             item.Overview = (overview ?? string.Empty).StripHtml();
         }
 
-        internal Task EnsureInfo(string musicBrainzReleaseGroupId, CancellationToken cancellationToken)
+        internal async Task EnsureInfo(string musicBrainzReleaseGroupId, CancellationToken cancellationToken)
         {
             var xmlPath = GetAlbumInfoPath(_config.ApplicationPaths, musicBrainzReleaseGroupId);
 
             var fileInfo = _fileSystem.GetFileSystemInfo(xmlPath);
 
-            if (fileInfo.Exists)
+            if (fileInfo.Exists
+                && (DateTime.UtcNow - _fileSystem.GetLastWriteTimeUtc(fileInfo)).TotalDays <= 2)
             {
-                if ((DateTime.UtcNow - _fileSystem.GetLastWriteTimeUtc(fileInfo)).TotalDays <= 2)
-                {
-                    return Task.CompletedTask;
-                }
+                return;
             }
 
-            return DownloadInfo(musicBrainzReleaseGroupId, cancellationToken);
+            await DownloadInfo(musicBrainzReleaseGroupId, cancellationToken).ConfigureAwait(false);
         }
 
         internal async Task DownloadInfo(string musicBrainzReleaseGroupId, CancellationToken cancellationToken)
@@ -176,17 +174,12 @@ namespace MediaBrowser.Providers.Plugins.AudioDb
             Directory.CreateDirectory(Path.GetDirectoryName(path));
 
             using var response = await _httpClientFactory.CreateClient(NamedClient.Default).GetAsync(url, cancellationToken).ConfigureAwait(false);
-            var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            await using (stream.ConfigureAwait(false))
+            var fileStreamOptions = AsyncFile.WriteOptions;
+            fileStreamOptions.Mode = FileMode.Create;
+            var fs = new FileStream(path, fileStreamOptions);
+            await using (fs.ConfigureAwait(false))
             {
-                var fileStreamOptions = AsyncFile.WriteOptions;
-                fileStreamOptions.Mode = FileMode.Create;
-                fileStreamOptions.PreallocationSize = stream.Length;
-                var xmlFileStream = new FileStream(path, fileStreamOptions);
-                await using (xmlFileStream.ConfigureAwait(false))
-                {
-                    await stream.CopyToAsync(xmlFileStream, cancellationToken).ConfigureAwait(false);
-                }
+                await response.Content.CopyToAsync(fs, cancellationToken).ConfigureAwait(false);
             }
         }
 
